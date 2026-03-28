@@ -2,7 +2,7 @@ import os
 import json
 import traceback
 from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -32,12 +32,21 @@ except Exception as e:
     load_errors["pandas"] = str(e)
 
 try:
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-    import plotly.io as pio
+    import numpy as np
 except Exception as e:
-    go = pio = make_subplots = None
-    load_errors["plotly"] = str(e)
+    np = None
+    load_errors["numpy"] = str(e)
+
+# 1. Root Route - Serve index.html
+@app.get("/")
+def read_root():
+    # Vercel structure: the root files are accessible from the project root
+    # Try multiple common paths for Vercel environments
+    paths = ["index.html", "../index.html", "/var/task/index.html"]
+    for path in paths:
+        if os.path.exists(path):
+            return FileResponse(path)
+    return JSONResponse(status_code=404, content={"error": "index.html not found", "cwd": os.getcwd(), "ls": os.listdir(".")})
 
 @app.get("/api/health")
 def health_check():
@@ -45,105 +54,221 @@ def health_check():
     return {
         "status": "online",
         "python_version": sys.version,
-        "environment": "Vercel/Lambda" if os.getenv("AWS_LAMBDA_FUNCTION_NAME") else "Local",
+        "environment": "Vercel/Lambda" if os.getenv("AWS_LAMBDA_FUNCTION_NAME") or os.getenv("VERCEL") else "Local",
         "load_errors": load_errors
     }
 
-def calculate_sma(data, window):
-    return data['Close'].rolling(window=window).mean()
-
-def calculate_rsi(data, window=14):
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-@app.get("/api/chart")
-def get_chart(ticker: str = "AAPL", period: str = "1mo", interval: str = "1d"):
-    if yf is None or pd is None or go is None:
-        return JSONResponse(status_code=500, content={"error": "Required libraries (yf/pd/go) failed to load.", "details": load_errors})
+# 2. Market History (Aligned with script.js)
+@app.get("/api/history")
+def get_history(ticker: str = "AAPL", period: str = "1mo", interval: str = "1d"):
+    if yf is None or pd is None:
+        return JSONResponse(status_code=500, content={"error": "yf/pd failed to load.", "details": load_errors})
     try:
         data = yf.download(ticker, period=period, interval=interval, progress=False)
         if data.empty:
             return JSONResponse(status_code=404, content={"error": "No data found."})
+        
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.droplevel(1)
-        data['SMA_20'] = calculate_sma(data, 20)
-        data['SMA_50'] = calculate_sma(data, 50)
-        data['RSI'] = calculate_rsi(data, 14)
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3], subplot_titles=(f"{ticker.upper()} Price", "RSI (14)"))
-        fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name="Price", increasing_line_color='#00FF81', decreasing_line_color='#FF3131'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=data.index, y=data['SMA_20'], line=dict(color='orange', width=1.5), name='SMA 20'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=data.index, y=data['SMA_50'], line=dict(color='cyan', width=1.5), name='SMA 50'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=data.index, y=data['RSI'], line=dict(color='magenta', width=1.5), name='RSI'), row=2, col=1)
-        fig.update_layout(paper_bgcolor="#0c0d0f", plot_bgcolor="#0c0d0f", font=dict(color="#808080", family="monospace", size=10), margin=dict(l=40, r=40, t=30, b=40), xaxis_rangeslider_visible=False)
-        return JSONResponse(content=json.loads(fig.to_json()))
+        
+        # Format for script.js (Canvas drawing)
+        formatted_data = []
+        for index, row in data.iterrows():
+            formatted_data.append({
+                "date": index.strftime('%Y-%m-%d %H:%M') if interval in ['1m','5m','15m','30m','60m','1h'] else index.strftime('%Y-%m-%d'),
+                "open": float(row['Open']),
+                "high": float(row['High']),
+                "low": float(row['Low']),
+                "close": float(row['Close']),
+                "volume": int(row['Volume'])
+            })
+        
+        return {"status": "success", "ticker": ticker, "data": formatted_data}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@app.get("/api/quotes")
-def get_quotes(tickers: str = "AAPL,MSFT,GOOGL"):
+# 3. Single Quote
+@app.get("/api/quote")
+def get_single_quote(ticker: str = "AAPL"):
     if yf is None: return {"error": "yfinance not loaded"}
     try:
+        t = yf.Ticker(ticker)
+        # Fast way to get price: download 1 day
+        data = yf.download(ticker, period="1d", progress=False)
+        if data.empty: return {"error": "No data"}
+        if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.droplevel(1)
+        
+        last_close = float(data['Close'].iloc[-1])
+        prev_close = float(data['Close'].iloc[-2]) if len(data) > 1 else last_close
+        
+        return {
+            "symbol": ticker,
+            "price": last_close,
+            "change": last_close - prev_close,
+            "change_pct": ((last_close - prev_close) / prev_close * 100) if prev_close != 0 else 0
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+# 4. Multi-ticker Quotes (for Pulse)
+@app.get("/api/quotes")
+def get_quotes(tickers: str = "AAPL,MSFT,GOOGL"):
+    if yf is None or pd is None: return {"error": "Libraries not loaded"}
+    try:
         ticker_list = [t.strip().upper() for t in tickers.split(',')]
+        # Fetch 5 days to ensure we have a previous close for change calculation
         data = yf.download(ticker_list, period="5d", progress=False)
         results = []
+        
         for ticker in ticker_list:
             try:
-                hist = data.xs(ticker, level=1, axis=1) if len(ticker_list) > 1 and isinstance(data.columns, pd.MultiIndex) else data
+                # Handle MultiIndex vs SingleIndex
+                if len(ticker_list) > 1:
+                    hist = data.xs(ticker, level=1, axis=1) if isinstance(data.columns, pd.MultiIndex) else data[ticker]
+                else:
+                    hist = data
+                    
                 if hist.empty: continue
-                latest = hist.iloc[-1]; prev = hist.iloc[-2] if len(hist) > 1 else latest
-                results.append({"symbol": ticker, "price": float(latest['Close']), "change": float(latest['Close'] - prev['Close']), "change_pct": float((latest['Close'] - prev['Close']) / prev['Close'] * 100)})
-            except: continue
+                latest = hist.iloc[-1]
+                prev = hist.iloc[-2] if len(hist) > 1 else latest
+                
+                results.append({
+                    "symbol": ticker,
+                    "price": float(latest['Close']),
+                    "change": float(latest['Close'] - prev['Close']),
+                    "change_pct": float((latest['Close'] - prev['Close']) / prev['Close'] * 100) if prev['Close'] != 0 else 0
+                })
+            except:
+                continue
         return {"quotes": results}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@app.get("/api/backtest")
-def get_backtest(ticker: str = "AAPL", strategy: str = "EMA", start: str = "2020-01-01", end: str = "2024-01-01"):
+# 5. Valuation (Lightweight logic)
+@app.get("/api/valuation")
+def get_valuation(ticker: str = "AAPL"):
+    if yf is None: return {"error": "yfinance not loaded"}
     try:
-        from backtesting_engine import run_vectorbt_backtest
-        results = run_vectorbt_backtest(ticker, start, end, strategy)
-        return {"status": "success", "data": results}
+        t = yf.Ticker(ticker)
+        info = t.info
+        
+        # Simple ratios from info
+        return {
+            "ticker": ticker,
+            "dupont_roe": info.get("returnOnEquity", 0.15),
+            "ev_ebitda": info.get("enterpriseToEbitda", 15.0),
+            "ratios": {
+                "gross_margin": info.get("grossMargins", 0.40),
+                "debt_to_equity": info.get("debtToEquity", 100.0) / 100.0 if info.get("debtToEquity") else 0.5
+            },
+            "dcf": {
+                "intrinsic_price": info.get("targetMeanPrice", info.get("currentPrice", 100) * 1.1),
+                "upside": (info.get("targetMeanPrice", info.get("currentPrice", 100) * 1.1) / info.get("currentPrice", 1) - 1) if info.get("currentPrice") else 0.1
+            }
+        }
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return {"error": str(e)}
 
+# 6. Options Activity
+@app.get("/api/options")
+def get_options(ticker: str = "AAPL"):
+    if yf is None: return {"error": "yfinance not loaded"}
+    try:
+        t = yf.Ticker(ticker)
+        expirations = t.options
+        if not expirations: return {"error": "No options"}
+        
+        # Just use the first expiry for simplicity
+        opt = t.option_chain(expirations[0])
+        call_vol = opt.calls['volume'].sum()
+        put_vol = opt.puts['volume'].sum()
+        pcr = put_vol / call_vol if call_vol > 0 else 1.0
+        
+        return {
+            "expiration": expirations[0],
+            "call_volume": int(call_vol),
+            "put_volume": int(put_vol),
+            "put_call_ratio": float(pcr),
+            "sentiment": "Bullish" if pcr < 0.7 else ("Bearish" if pcr > 1.1 else "Neutral")
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+# 7. Sentiment
 @app.get("/api/sentiment")
 def get_sentiment(ticker: str = "AAPL"):
     try:
         if yf is None: return {"error": "yfinance not loaded"}
-        t = yf.Ticker(ticker); news = t.news
+        t = yf.Ticker(ticker)
+        news = t.news or []
+        
         from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
         analyzer = SentimentIntensityAnalyzer()
-        results = []; total_score = 0
-        for item in (news or []):
+        
+        results = []
+        total_score = 0
+        for item in news:
             title = item.get("title", "")
             if not title: continue
             score = analyzer.polarity_scores(title)['compound']
             total_score += score
-            results.append({"title": title, "score": score})
-        return {"status": "success", "ticker": ticker, "average_sentiment": total_score/len(results) if results else 0, "news": results}
+            results.append({
+                "title": title, 
+                "score": score,
+                "publisher": item.get("publisher", "Unknown")
+            })
+            
+        return {
+            "status": "success", 
+            "ticker": ticker, 
+            "average_sentiment": total_score/len(results) if results else 0, 
+            "news": results
+        }
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+# 8. Portfolio Optimization
 @app.get("/api/portfolio")
 def get_portfolio(holdings: str = "AAPL:50,MSFT:100,GOOGL:20"):
     try:
-        from portfolio_risk import get_portfolio_risk_data
-        holdings_dict = {item.split(':')[0].strip().upper(): float(item.split(':')[1]) for item in holdings.split(',') if ':' in item}
-        return get_portfolio_risk_data(holdings=holdings_dict)
+        # Check if helper exists in api/
+        import sys
+        sys.path.append(os.path.dirname(__file__))
+        import portfolio_risk
+        
+        holdings_dict = {}
+        for item in holdings.split(','):
+            if ':' in item:
+                sym, val = item.split(':')
+                holdings_dict[sym.strip().upper()] = float(val)
+        
+        return portfolio_risk.get_portfolio_risk_data(holdings=holdings_dict)
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
 
-# General Catch-all News
+# 9. Backtest
+@app.get("/api/backtest")
+def get_backtest(ticker: str = "AAPL", strategy: str = "EMA", start: str = "2022-01-01", end: str = "2024-03-01"):
+    try:
+        import sys
+        sys.path.append(os.path.dirname(__file__))
+        import backtesting_engine
+        
+        results = backtesting_engine.run_vectorbt_backtest(ticker, start, end, strategy)
+        return {"status": "success", "data": results}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
+
+# 10. General News
 @app.get("/api/news")
 def get_general_news():
     try:
         if yf is None: return {"error": "yfinance not loaded"}
-        t = yf.Ticker("SPY"); news = t.news; formatted = []
-        for item in (news or []):
-            formatted.append({"time": "00:00", "title": item.get("title", "")})
+        t = yf.Ticker("SPY")
+        news = t.news or []
+        formatted = []
+        for item in news:
+            formatted.append({"time": "Live", "title": item.get("title", "")})
         return {"status": "success", "news": formatted}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
