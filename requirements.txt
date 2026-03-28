@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+yfinance
+pandas
+plotly
+vaderSentiment
+numpy
+PyPortfolioOpt
+vectorbt
+backtrader

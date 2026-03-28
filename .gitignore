@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+env/
+venv/
+.env
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.python-version
+
+# Vercel
+.vercel
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

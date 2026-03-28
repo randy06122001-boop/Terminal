@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TERMINAL - Bloomberg Style</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono/i:wght@400;700&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+</head>
+<body class="terminal-body">
+    <main class="terminal-container">
+        <!-- Top Menu / Command Bar -->
+        <header class="terminal-header">
+            <div class="header-left">
+                <div class="terminal-logo">BLOOMBERG</div>
+                <div class="command-input-container">
+                    <span class="command-prompt">></span>
+                    <input type="text" class="command-input" placeholder="Enter command or search..." autofocus>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="clock" id="clock">18:47:16</div>
+                <div class="user-id">R.RANDOLPH (8.22.45)</div>
+            </div>
+        </header>
+
+        <!-- Main Workspace Grid -->
+        <div class="terminal-grid">
+            <!-- Left Panel: Market Pulse -->
+            <section class="panel pulse-panel" id="pulse-panel">
+                <div class="panel-header">
+                    <h2 class="panel-title">MARKET PULSE</h2>
+                    <div class="panel-controls">
+                        <span class="control-btn">−</span>
+                        <span class="control-btn">□</span>
+                    </div>
+                </div>
+                <div class="pulse-list" id="pulse-list">
+                    <!-- Dynamic Pulse Items -->
+                </div>
+            </section>
+
+            <!-- Center Panel: Main Chart -->
+            <section class="panel chart-panel" id="chart-panel">
+                <div class="panel-header">
+                    <div class="chart-header-info">
+                        <span class="symbol-name">AAPL US Equity</span>
+                        <span class="last-price" id="main-price">232.45</span>
+                        <span class="price-change green">+1.24 (+0.54%)</span>
+                    </div>
+                    <div class="chart-timeframes">
+                        <button class="tf-btn" data-interval="1m" data-period="7d">1M</button>
+                        <button class="tf-btn active" data-interval="5m" data-period="60d">5M</button>
+                        <button class="tf-btn" data-interval="15m" data-period="60d">15M</button>
+                        <button class="tf-btn" data-interval="1h" data-period="60d">1H</button>
+                        <button class="tf-btn" data-interval="1d" data-period="1y">1D</button>
+                    </div>
+                </div>
+                <div class="chart-container" id="main-view">
+                    <canvas id="main-chart"></canvas>
+                </div>
+                
+                <div class="portfolio-view" id="portfolio-view" style="display: none;">
+                    <div class="portfolio-controls" style="display:flex; gap: 16px; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+                        <label style="color:var(--grey); font-family:var(--main-font); font-size:0.8rem;">TICKERS</label>
+                        <input type="text" id="port-tickers" value="AAPL,MSFT,GOOGL,AMZN,JPM,JNJ,XOM" style="background:#111; color:var(--amber); border:1px solid var(--border-color); padding:4px 8px; width:300px; font-family:var(--mono-font); font-size:0.9rem;">
+                        
+                        <label style="color:var(--grey); font-family:var(--main-font); font-size:0.8rem;">SIZE ($)</label>
+                        <input type="number" id="port-size" value="100000" style="background:#111; color:var(--amber); border:1px solid var(--border-color); padding:4px 8px; width:120px; font-family:var(--mono-font); font-size:0.9rem;">
+                        
+                        <button id="port-update-btn" style="background:#222; color:var(--white); border:1px solid var(--border-color); padding:4px 12px; cursor:pointer; font-weight:bold; font-family:var(--main-font);">OPTIMIZE</button>
+                    </div>
+                    <div class="portfolio-header" style="margin-top: 16px;">
+                        <h2>CURRENT PORTFOLIO SUMMARY</h2>
+                        <div class="portfolio-metrics" id="current-metrics">
+                            <!-- Metrics injected via JS -->
+                        </div>
+                    </div>
+                    <div class="portfolio-header">
+                        <h2>OPTIMAL ASSET ALLOCATION (MAX SHARPE)</h2>
+                        <div class="portfolio-metrics" id="portfolio-metrics">
+                            <!-- Metrics injected via JS -->
+                        </div>
+                    </div>
+                    <div class="portfolio-body">
+                        <div class="allocation-chart" id="allocation-chart">
+                            <!-- Bars injected via JS -->
+                        </div>
+                        <div class="monte-carlo-box">
+                            <h3>MONTE CARLO SIMULATION (1,000 ITERATIONS)</h3>
+                            <div id="mc-stats"></div>
+                        </div>
+                        <div class="monte-carlo-box" style="margin-top: 16px;">
+                            <h3>DISCRETE ALLOCATION (SHARES TO BUY)</h3>
+                            <div id="discrete-stats"></div>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+
+            <!-- Right Panel: Order Book / News -->
+            <section class="panel sidebar-panel" id="sidebar-panel">
+                <div class="panel-header">
+                    <h2 class="panel-title">VALUATION & MODELS</h2>
+                </div>
+                <div class="valuation-list" id="valuation-list" style="padding: 16px; border-bottom: 1px solid var(--border-color); font-size: 0.85rem; color: var(--white); font-family: var(--main-font); line-height: 1.5;">
+                    <span style="color: var(--grey);">Loading models...</span>
+                </div>
+                <div class="panel-header" style="border-top: 1px solid var(--border-color);">
+                    <h2 class="panel-title">OPTIONS ACTIVITY</h2>
+                </div>
+                <div class="options-list" id="options-list" style="padding: 16px; border-bottom: 1px solid var(--border-color); font-size: 0.85rem; color: var(--white); font-family: var(--main-font); line-height: 1.5;">
+                    <span style="color: var(--grey);">Loading options...</span>
+                </div>
+                <div class="panel-header" style="border-top: 1px solid var(--border-color);">
+                    <h2 class="panel-title" id="sidebar-title">TOP NEWS</h2>
+                </div>
+                <div class="news-list" id="news-list">
+                    <!-- Dynamic News Items -->
+                </div>
+
+                <!-- Backtest Results Container -->
+                <div class="backtest-results" id="backtest-results" style="display: none; padding: 15px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #ccc;">
+                </div>
+                
+                <!-- Sentiment Results Container -->
+                <div class="sentiment-results" id="sentiment-results" style="display: none; padding: 15px; font-family: 'Inter', sans-serif; font-size: 11px; color: #ccc;">
+                </div>
+            </section>
+
+            <!-- Bottom Ticker -->
+            <footer class="terminal-footer">
+                <div class="ticker-wrapper">
+                    <div class="ticker-item"><span class="ticker-symbol">SPX</span> <span class="ticker-val">5,117.09</span> <span class="ticker-chg green">+0.45%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">NDX</span> <span class="ticker-val">18,177.30</span> <span class="ticker-chg green">+1.12%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">DOW</span> <span class="ticker-val">39,127.14</span> <span class="ticker-chg red">-0.08%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">BTC</span> <span class="ticker-val">67,432.11</span> <span class="ticker-chg green">+3.41%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">GOLD</span> <span class="ticker-val">2,158.40</span> <span class="ticker-chg red">-0.12%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">OIL</span> <span class="ticker-val">81.27</span> <span class="ticker-chg green">+0.89%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">SPX</span> <span class="ticker-val">5,117.09</span> <span class="ticker-chg green">+0.45%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">NDX</span> <span class="ticker-val">18,177.30</span> <span class="ticker-chg green">+1.12%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">DOW</span> <span class="ticker-val">39,127.14</span> <span class="ticker-chg red">-0.08%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">BTC</span> <span class="ticker-val">67,432.11</span> <span class="ticker-chg green">+3.41%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">GOLD</span> <span class="ticker-val">2,158.40</span> <span class="ticker-chg red">-0.12%</span></div>
+                    <div class="ticker-item"><span class="ticker-symbol">OIL</span> <span class="ticker-val">81.27</span> <span class="ticker-chg green">+0.89%</span></div>
+                </div>
+            </footer>
+        </div>
+    </main>
+
+    <script src="script.js?v=2"></script>
+</body>
+</html>
