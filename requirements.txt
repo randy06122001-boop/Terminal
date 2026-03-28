@@ -5,3 +5,6 @@ plotly
 vaderSentiment
 numpy
 requests
+lxml
+beautifulsoup4
+multitasking
