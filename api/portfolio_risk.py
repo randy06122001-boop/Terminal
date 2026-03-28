@@ -1,28 +1,29 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from scipy.optimize import minimize
 import warnings
 
 warnings.filterwarnings("ignore")
 
-def get_portfolio_risk_data(holdings={"AAPL": 50, "MSFT": 100, "GOOGL": 20}, start_date="2020-01-01", end_date="2023-12-31"):
+def get_portfolio_risk_data(holdings={"AAPL": 50, "MSFT": 100, "GOOGL": 20}, start_date="2022-01-01", end_date="2024-01-01"):
     """
-    Manual implementation of Portfolio Optimization to remove heavy PyPortfolioOpt dependency.
+    Ultra-lightweight Portfolio Optimization using Pure Numpy/Pandas.
+    Replaces Scipy/CVXPY to keep the deployment size tiny.
     """
     tickers = list(holdings.keys())
     
-    # 1. Download data
+    # 1. Download data (reduced to 2 years for speed)
     data = yf.download(tickers, start=start_date, end=end_date, progress=False)
-    if 'Close' in data.columns.levels[0] if isinstance(data.columns, pd.MultiIndex) else False:
-        df = data['Close']
-    else:
-        df = data['Adj Close'] if 'Adj Close' in data else data
-
+    
+    # Handle single ticker data shape
     if len(tickers) == 1:
-        if isinstance(df, pd.Series):
-            df = df.to_frame(name=tickers[0])
-
+        if 'Close' in data:
+            df = data['Close'].to_frame(name=tickers[0])
+        else:
+            df = data.to_frame(name=tickers[0])
+    else:
+        df = data['Close'] if 'Close' in data.columns.levels[0] if isinstance(data.columns, pd.MultiIndex) else data['Close']
+    
     df.ffill(inplace=True)
     df.dropna(inplace=True)
     
@@ -31,74 +32,39 @@ def get_portfolio_risk_data(holdings={"AAPL": 50, "MSFT": 100, "GOOGL": 20}, sta
 
     # 2. Current Portfolio Metrics
     shares = pd.Series(holdings)
-    latest_prices_aligned = latest_prices.reindex(shares.index).fillna(0)
-    current_value = (shares * latest_prices_aligned).sum()
-    current_weights = (shares * latest_prices_aligned) / current_value
+    current_value = (shares * latest_prices).sum()
+    current_weights = (shares * latest_prices) / current_value
 
-    # Performance metrics
     ann_returns = returns_df.mean() * 252
     cov_matrix = returns_df.cov() * 252
     
-    cw_aligned = current_weights.reindex(ann_returns.index).fillna(0)
-    current_return = np.dot(cw_aligned, ann_returns)
-    current_volatility = np.sqrt(np.dot(cw_aligned.T, np.dot(cov_matrix, cw_aligned)))
-    current_sharpe = (current_return - 0.02) / current_volatility if current_volatility > 0 else 0
+    # Calculate stats for a collection of weights
+    def get_stats(w_arr):
+        ret = np.sum(ann_returns.values * w_arr, axis=1)
+        vol = np.sqrt(np.einsum('ij,jk,ik->i', w_arr, cov_matrix.values, w_arr))
+        sharpe = (ret - 0.02) / vol
+        return ret, vol, sharpe
 
-    # 3. Optimization: Max Sharpe (Using SciPy)
+    # 3. High-Speed Monte Carlo Simulation (1,000 runs)
     num_assets = len(tickers)
+    num_portfolios = 1000
     
-    def portfolio_stats(weights):
-        p_ret = np.dot(weights, ann_returns)
-        p_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-        sharpe = (p_ret - 0.02) / p_vol
-        return np.array([p_ret, p_vol, sharpe])
-
-    def neg_sharpe(weights):
-        return -portfolio_stats(weights)[2]
-
-    # Constraints: sum(weights) == 1
-    cons = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1.0})
-    # Bounds: 0 to 1 for each asset
-    bounds = tuple((0.0, 1.0) for asset in range(num_assets))
-    # Initial guess
-    init_guess = num_assets * [1.0 / num_assets]
+    # Generate random weights in bulk for speed
+    rand_weights = np.random.random((num_portfolios, num_assets))
+    rand_weights = rand_weights / np.sum(rand_weights, axis=1)[:, np.newaxis]
     
-    # Run optimization
-    opt_results = minimize(neg_sharpe, init_guess, method='SLSQP', bounds=bounds, constraints=cons)
+    p_rets, p_vols, p_sharpes = get_stats(rand_weights)
     
-    if opt_results.success:
-        optimal_weights = opt_results.x
-        opt_perf = portfolio_stats(optimal_weights)
-    else:
-        optimal_weights = current_weights.values
-        opt_perf = [current_return, current_volatility, current_sharpe]
-
+    # Find the best port in the simulation
+    max_sharpe_idx = np.argmax(p_sharpes)
+    min_vol_idx = np.argmin(p_vols)
+    
+    optimal_weights = rand_weights[max_sharpe_idx]
+    opt_perf = [p_rets[max_sharpe_idx], p_vols[max_sharpe_idx], p_sharpes[max_sharpe_idx]]
+    
     cleaned_weights_sharpe = dict(zip(tickers, optimal_weights))
-    
-    # 4. HRP Allocation (Simplified Version using Volatility weighting as a proxy)
-    # Since Hierarchical Risk Parity is complex, use "Inverse Volatility" weighting 
-    # as a lightweight risk-parity proxy to replace the HRPOpt class.
-    vols = returns_df.std() * np.sqrt(252)
-    inv_vols = 1.0 / vols
-    hrp_weights_raw = inv_vols / inv_vols.sum()
-    cleaned_weights_hrp = hrp_weights_raw.to_dict()
 
-    # 5. Monte Carlo
-    num_simulated = 500
-    results = np.zeros((3, num_simulated))
-    for i in range(num_simulated):
-        weights = np.random.random(num_assets)
-        weights /= np.sum(weights)
-        p_ret = np.dot(weights, ann_returns)
-        p_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-        results[0,i] = p_vol
-        results[1,i] = p_ret
-        results[2,i] = (p_ret - 0.02) / p_vol if p_vol > 0 else 0
-
-    max_sharpe_idx = np.argmax(results[2])
-    min_vol_idx = np.argmin(results[0])
-
-    # 6. Discrete Allocation (Simple rounding/quantizing)
+    # 4. Discrete Allocation (Simple Quantization)
     allocation = {}
     for ticker, weight in cleaned_weights_sharpe.items():
         share_count = int((weight * current_value) / latest_prices[ticker])
@@ -107,7 +73,7 @@ def get_portfolio_risk_data(holdings={"AAPL": 50, "MSFT": 100, "GOOGL": 20}, sta
             
     leftover = current_value - sum(allocation[t] * latest_prices[t] for t in allocation)
 
-    # 7. Trade Recommendations
+    # 5. Trade Recommendations
     trades = {}
     for ticker in tickers:
         current_share = holdings.get(ticker, 0)
@@ -119,9 +85,9 @@ def get_portfolio_risk_data(holdings={"AAPL": 50, "MSFT": 100, "GOOGL": 20}, sta
     return {
         "current_portfolio": {
             "value": float(current_value),
-            "expected_return": float(current_return),
-            "annual_volatility": float(current_volatility),
-            "sharpe_ratio": float(current_sharpe),
+            "expected_return": float(np.dot(current_weights, ann_returns)),
+            "annual_volatility": float(np.sqrt(np.dot(current_weights.T, np.dot(cov_matrix, current_weights)))),
+            "sharpe_ratio": float((np.dot(current_weights, ann_returns) - 0.02) / np.sqrt(np.dot(current_weights.T, np.dot(cov_matrix, current_weights)))),
             "holdings": holdings,
             "weights": {k: float(v) for k, v in current_weights.items()}
         },
@@ -130,22 +96,21 @@ def get_portfolio_risk_data(holdings={"AAPL": 50, "MSFT": 100, "GOOGL": 20}, sta
             "annual_volatility": float(opt_perf[1]),
             "sharpe_ratio": float(opt_perf[2]),
             "max_sharpe_weights": {k: float(v) for k, v in cleaned_weights_sharpe.items() if v > 0.01},
-            "hrp_weights": {k: float(v) for k, v in cleaned_weights_hrp.items() if v > 0},
             "allocation": {k: int(v) for k, v in allocation.items()},
             "leftover": float(leftover)
         },
         "trades": trades,
         "monte_carlo": {
-            "num_simulated": num_simulated,
+            "num_simulated": num_portfolios,
             "max_sharpe": {
-                "sharpe": float(results[2, max_sharpe_idx]),
-                "return": float(results[1, max_sharpe_idx]),
-                "volatility": float(results[0, max_sharpe_idx])
+                "sharpe": float(p_sharpes[max_sharpe_idx]),
+                "return": float(p_rets[max_sharpe_idx]),
+                "volatility": float(p_vols[max_sharpe_idx])
             },
             "min_vol": {
-                "sharpe": float(results[2, min_vol_idx]),
-                "return": float(results[1, min_vol_idx]),
-                "volatility": float(results[0, min_vol_idx])
+                "sharpe": float(p_sharpes[min_vol_idx]),
+                "return": float(p_rets[min_vol_idx]),
+                "volatility": float(p_vols[min_vol_idx])
             }
         }
     }
