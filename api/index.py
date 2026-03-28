@@ -32,6 +32,16 @@ def calculate_rsi(data, window=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+@app.get("/api/health")
+def health_check():
+    import sys
+    import os
+    return {
+        "status": "online",
+        "python_version": sys.version,
+        "environment": "Vercel/Lambda" if os.getenv("AWS_LAMBDA_FUNCTION_NAME") else "Local"
+    }
+
 @app.get("/api/chart")
 def get_chart(ticker: str = "AAPL", period: str = "1mo", interval: str = "1d"):
     """
