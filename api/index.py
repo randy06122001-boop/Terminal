@@ -272,3 +272,23 @@ def get_general_news():
         return {"status": "success", "news": formatted}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+# 11. Static File Fallback (Fix for 404 on CSS/JS)
+@app.get("/{path:path}")
+def serve_static_files(path: str):
+    # If it's empty, it's the root
+    if not path or path == "":
+        return read_root()
+    
+    # List of allowed static files to serve
+    allowed = ["style.css", "script.js", "favicon.ico"]
+    # Handle query params like script.js?v=2
+    clean_path = path.split('?')[0]
+    
+    if clean_path in allowed:
+        # Check potential locations
+        for p in [clean_path, f"../{clean_path}", f"/var/task/{clean_path}"]:
+            if os.path.exists(p):
+                return FileResponse(p)
+    
+    return JSONResponse(status_code=404, content={"detail": "Not Found", "path": path})
